@@ -772,7 +772,7 @@
         while (true) {
           const { data, error } = await realClient
             .from('reports')
-            .select('*')
+            .select('id, name, alias, age_range, city, state, country, categories, created_at, submitter_uuid')
             .order('created_at', { ascending: false })
             .range(from, from + 999);
           if (error) throw error;
@@ -781,13 +781,30 @@
           if (rows.length < 1000) break;
           from += 1000;
         }
-        _localSaveReports(collected);
+
+        // Try to save; if localStorage is still full, trim to the most recent 500
+        let saved = false;
+        for (const slice of [collected, collected.slice(0, 500), collected.slice(0, 200)]) {
+          try {
+            localStorage.setItem(LOCAL_REPORTS_KEY, JSON.stringify(slice));
+            saved = true;
+            if (slice.length < collected.length) {
+              const msg = document.createElement('span');
+              msg.style.cssText = 'margin-left:0.75rem;color:#fbbf24;font-size:0.78rem;';
+              msg.textContent = `Storage full — loaded most recent ${slice.length} of ${collected.length} reports.`;
+              btn.insertAdjacentElement('afterend', msg);
+              setTimeout(() => msg.remove(), 8000);
+            }
+            break;
+          } catch (_) { /* try smaller slice */ }
+        }
+        if (!saved) throw new Error('localStorage quota exceeded even with minimal data.');
+
         localStorage.removeItem(LOCAL_STORIES_KEY);
         window.location.reload();
       } catch (err) {
         btn.textContent = 'Reset from live DB';
         btn.disabled = false;
-        // inline error — no blocking alert
         const msg = document.createElement('span');
         msg.style.cssText = 'margin-left:0.75rem;color:#fca5a5;font-size:0.78rem;';
         msg.textContent = 'Sync failed: ' + err.message;
