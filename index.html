@@ -2037,24 +2037,43 @@ function addStoryTimestamp() {
       browseMessage.className = 'message';
     }
 
+    async function fetchReportsFromSupabase() {
+      const collected = [];
+      let from = 0;
+      while (true) {
+        const { data, error } = await supabaseClient
+          .from('reports')
+          .select('id, name, alias, age_range, city, state, country, categories, created_at, submitter_uuid')
+          .order('created_at', { ascending: false })
+          .range(from, from + 999);
+        if (error) throw error;
+        const rows = Array.isArray(data) ? data : [];
+        collected.push(...rows);
+        if (rows.length < 1000) break;
+        from += 1000;
+      }
+      return collected;
+    }
+
     async function loadReports() {
       browseMessage.textContent = 'Loading reports...';
       browseMessage.className = 'message';
       startReportCountLoadingAnimation();
       const WORKER_URL = 'https://api.namehim.app/filtered-reports';
+      const isLocalhost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
 
       try {
-        const response = await fetch(WORKER_URL);
-        if (!response.ok) {
-          throw new Error(`Worker returned ${response.status}`);
+        let rawReports;
+        if (isLocalhost) {
+          rawReports = await fetchReportsFromSupabase();
+        } else {
+          const response = await fetch(WORKER_URL);
+          if (!response.ok) throw new Error(`Worker returned ${response.status}`);
+          rawReports = await response.json();
+          if (!Array.isArray(rawReports)) throw new Error('Worker did not return an array');
         }
-        const reports = await response.json();
 
-        if (!Array.isArray(reports)) {
-          throw new Error('Worker did not return an array');
-        }
-
-        allReports = sanitizeFetchedReports(reports);
+        allReports = sanitizeFetchedReports(rawReports);
         window.allReports = allReports;
         hasLoadedReports = true;
         updateReportCount(allReports.length);
