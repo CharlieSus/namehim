@@ -314,6 +314,29 @@
       padding: 0;
       text-decoration: underline;
     }
+    .modal-overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.6);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 200;
+    }
+    .modal-overlay.hidden { display: none; }
+    .modal-box {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 0.65rem;
+      padding: 1.5rem;
+      max-width: 480px;
+      width: 100%;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+    .modal-box h3 { margin: 0 0 0.75rem; font-size: 1rem; }
+    .modal-cats { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 1rem; }
+    .modal-cats label { display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; cursor: pointer; }
+    .modal-cats input[type="checkbox"]:disabled { opacity: 0.45; cursor: not-allowed; }
+    .modal-cats label:has(input:disabled) { opacity: 0.6; cursor: not-allowed; }
+    .modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
 
     .report-timestamp {
       font-size: 0.7rem;
@@ -951,6 +974,18 @@
       <span>Open source</span>
     </div>
   </footer>
+
+  <div id="add-cat-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="add-cat-modal-title">
+    <div class="modal-box">
+      <h3 id="add-cat-modal-title">Add Categories</h3>
+      <p style="font-size:0.8rem;color:var(--muted);margin:0 0 0.75rem;">Checked categories are already on this entry and cannot be removed. Add any missing ones.</p>
+      <div id="add-cat-checkboxes" class="modal-cats"></div>
+      <div class="modal-actions">
+        <button type="button" id="add-cat-cancel">Cancel</button>
+        <button type="button" id="add-cat-save">Save</button>
+      </div>
+    </div>
+  </div>
 
   <script>
     const routes = {
@@ -1879,6 +1914,7 @@ function addStoryTimestamp() {
           <td data-label="Actions">
             <div class="row-actions">
               <button type="button" class="${corrobClass}" data-report-id="${escapeHTML(reportId)}"${alreadyCorroborated ? ' disabled' : ''}>${corrobLabel}</button>
+              <button type="button" class="add-cat-btn" data-report-id="${escapeHTML(reportId)}">Add Categories</button>
               <button type="button" class="report-entry-btn" data-report-id="${escapeHTML(reportId)}">Report this entry</button>
               <button type="button" class="report-share-btn" data-report-id="${escapeHTML(reportId)}">Share</button>
             </div>
@@ -2374,6 +2410,14 @@ function addStoryTimestamp() {
       return;
     }
 
+    const addCatBtn = event.target.closest('.add-cat-btn');
+    if (addCatBtn) {
+      const reportId = addCatBtn.getAttribute('data-report-id');
+      const report = allReports.find(r => String(r.id) === reportId);
+      if (report) openAddCategoriesModal(reportId, report.categories);
+      return;
+    }
+
     const shareButton = event.target.closest('.report-share-btn');
     if (shareButton) {
       const sharedReportId = shareButton.getAttribute('data-report-id');
@@ -2610,6 +2654,61 @@ function addStoryTimestamp() {
           renderPagedReports(currentFilteredReports, totalPages);
         }
       });
+      // --- Add Categories Modal ---
+      let _addCatReportId = null;
+      const addCatModal = document.getElementById('add-cat-modal');
+      const addCatCheckboxes = document.getElementById('add-cat-checkboxes');
+      const addCatCancel = document.getElementById('add-cat-cancel');
+      const addCatSave = document.getElementById('add-cat-save');
+
+      function openAddCategoriesModal(reportId, existingCategories) {
+        _addCatReportId = reportId;
+        const existing = new Set((existingCategories || []).map(c => String(c).toLowerCase().trim()));
+        addCatCheckboxes.innerHTML = '';
+        CATEGORIES.forEach(cat => {
+          const isExisting = existing.has(cat);
+          const label = document.createElement('label');
+          label.innerHTML = `<input type="checkbox" value="${escapeHTML(cat)}"${isExisting ? ' checked disabled' : ''}> ${escapeHTML(toTitleCase(cat))}`;
+          addCatCheckboxes.appendChild(label);
+        });
+        addCatModal.classList.remove('hidden');
+      }
+
+      async function handleAddCategories() {
+        const report = allReports.find(r => String(r.id) === String(_addCatReportId));
+        if (!report) return;
+        const existing = new Set((report.categories || []).map(c => String(c).toLowerCase().trim()));
+        const checked = [...addCatCheckboxes.querySelectorAll('input[type="checkbox"]:checked')]
+          .map(cb => cb.value);
+        const merged = [...new Set([...existing, ...checked])];
+        if (merged.length === existing.size) {
+          addCatModal.classList.add('hidden');
+          return;
+        }
+        addCatSave.disabled = true;
+        addCatSave.textContent = 'Saving…';
+        try {
+          const { error } = await supabaseClient
+            .from('reports')
+            .update({ categories: merged })
+            .eq('id', parseInt(_addCatReportId, 10));
+          if (error) throw error;
+          const idx = allReports.findIndex(r => String(r.id) === String(_addCatReportId));
+          if (idx !== -1) allReports[idx].categories = merged;
+          addCatModal.classList.add('hidden');
+          updateBrowseViewFromRoute({ preserveBrowsePage: true });
+        } catch (err) {
+          alert('Could not save categories: ' + (err.message || 'unknown error'));
+        } finally {
+          addCatSave.disabled = false;
+          addCatSave.textContent = 'Save';
+        }
+      }
+
+      if (addCatCancel) addCatCancel.addEventListener('click', () => addCatModal.classList.add('hidden'));
+      if (addCatSave) addCatSave.addEventListener('click', handleAddCategories);
+      addCatModal.addEventListener('click', e => { if (e.target === addCatModal) addCatModal.classList.add('hidden'); });
+
       // --- Duplicate name check ---
       const nameDupeWarning = document.getElementById('name-dupe-warning');
       const NAME_TITLES = new Set(['dr.','mr.','mrs.','ms.','prof.','rev.']);
