@@ -281,6 +281,52 @@
       gap: 0.45rem;
       flex-wrap: wrap;
     }
+    .report-meta {
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-top: 0.2rem;
+    }
+    .corroborate-btn.corroborated { opacity: 0.6; cursor: default; }
+    .name-dupe-box {
+      background: #1c1a10;
+      border: 1px solid #ca8a04;
+      border-radius: 0.5rem;
+      padding: 0.75rem 1rem;
+      margin-top: 0.75rem;
+      font-size: 0.875rem;
+    }
+    .name-dupe-box .dupe-heading { color: #fbbf24; font-weight: 600; margin-bottom: 0.5rem; }
+    .name-dupe-match {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.35rem 0;
+      border-top: 1px solid #292519;
+      flex-wrap: wrap;
+    }
+    .name-dupe-match:first-of-type { border-top: none; }
+    .name-dupe-info { color: var(--muted); font-size: 0.8rem; }
+    .name-dupe-dismiss {
+      margin-top: 0.6rem; font-size: 0.8rem; color: var(--muted);
+      background: none; border: none; cursor: pointer; padding: 0; text-decoration: underline;
+    }
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+      display: flex; align-items: center; justify-content: center; z-index: 200;
+    }
+    .modal-overlay.hidden { display: none; }
+    .modal-box {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 0.65rem; padding: 1.5rem;
+      max-width: 480px; width: 100%; max-height: 90vh; overflow-y: auto;
+    }
+    .modal-box h3 { margin: 0 0 0.75rem; font-size: 1rem; }
+    .modal-cats { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 1rem; }
+    .modal-cats label { display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; cursor: pointer; }
+    .modal-cats input[type="checkbox"]:disabled { opacity: 0.45; cursor: not-allowed; }
+    .modal-cats label:has(input:disabled) { opacity: 0.6; cursor: not-allowed; }
+    .modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
 
     .report-timestamp {
       font-size: 0.7rem;
@@ -572,6 +618,10 @@
         <div id="single-report-controls" class="single-report-controls hidden">
           <button id="back-to-all-reports" type="button">← Back to all reports</button>
         </div>
+        <div id="from-submit-bar" class="hidden" style="margin-bottom:0.75rem;display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;">
+          <span style="font-size:0.875rem;color:var(--muted);">Showing entries that may match the name you entered.</span>
+          <button id="not-this-person-btn" type="button">None of these people — go back to submit</button>
+        </div>
         <p class="table-guidance">
           Select a country or state from the list or click show map to see results for specific locations.
           <select id="browse-country-select" aria-label="Select a country to filter reports">
@@ -618,6 +668,29 @@
           <div class="row">
             <label for="name">Name *</label>
             <input id="name" type="text" maxlength="20" required inputmode="text" />
+          </div>
+
+          <div id="name-dupe-warning" class="hidden"></div>
+
+          <div class="row">
+            <div class="grid">
+              <div>
+                <label for="alias">Nickname / Alias (optional)</label>
+                <input id="alias" type="text" inputmode="text" maxlength="80" />
+              </div>
+              <div>
+                <label for="age-range">Approximate Age (optional)</label>
+                <select id="age-range">
+                  <option value="">Unknown</option>
+                  <option value="18-24">18–24</option>
+                  <option value="25-34">25–34</option>
+                  <option value="35-44">35–44</option>
+                  <option value="45-54">45–54</option>
+                  <option value="55-64">55–64</option>
+                  <option value="65+">65+</option>
+                </select>
+              </div>
+            </div>
           </div>
 
           <div class="row">
@@ -907,6 +980,18 @@
     </div>
   </footer>
 
+  <div id="add-cat-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="add-cat-modal-title">
+    <div class="modal-box">
+      <h3 id="add-cat-modal-title">Add Categories</h3>
+      <p style="font-size:0.8rem;color:var(--muted);margin:0 0 0.75rem;">Checked categories are already on this entry and cannot be removed. Add any missing ones.</p>
+      <div id="add-cat-checkboxes" class="modal-cats"></div>
+      <div class="modal-actions">
+        <button type="button" id="add-cat-cancel">Cancel</button>
+        <button type="button" id="add-cat-save">Save</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const routes = {
   '#/browse': 'page-browse',
@@ -1027,6 +1112,8 @@
     let activeSingleStoryId = null;
     let approvedStories = [];
     let hasLoadedReports = false;
+    let corrobCounts = {};
+    const corroborated = new Set(JSON.parse(localStorage.getItem('namehim_corroborated') || '[]'));
 
     // --- ADDED: submitter_uuid management (critical fix) ---
     function getOrCreateSubmitterId() {
@@ -1512,10 +1599,26 @@ function filterReportsByState(stateFullName) {
     function updateBrowseViewFromRoute(options = {}) {
       const preserveBrowsePage = Boolean(options.preserveBrowsePage);
       const route = getCurrentRoute();
+      const fromSubmitBar = document.getElementById('from-submit-bar');
       if (route !== '#/browse') {
         activeSingleReportId = null;
         setSingleReportControlsVisible(false);
         setBrowseTitleForSingleReport(null);
+        if (fromSubmitBar) fromSubmitBar.classList.add('hidden');
+        return;
+      }
+
+      const hashParams = new URLSearchParams((window.location.hash.split('?')[1] || ''));
+      const fromSubmit = hashParams.get('from') === 'submit';
+      const qParam = (hashParams.get('q') || '').trim();
+      if (fromSubmitBar) fromSubmitBar.classList.toggle('hidden', !fromSubmit);
+
+      if (qParam && !getReportIdFromUrl()) {
+        activeSingleReportId = null;
+        setSingleReportControlsVisible(false);
+        setBrowseTitleForSingleReport(null);
+        reportSearch.value = qParam;
+        applySearchFilter({ preservePage: false });
         return;
       }
 
@@ -1822,15 +1925,30 @@ function addStoryTimestamp() {
           ? '<span class="report-timestamp">' + escapeHTML(formattedTimestamp) + '</span>'
           : '';
 
+        const metaParts = [];
+        if (report.alias) metaParts.push('aka: ' + escapeHTML(report.alias));
+        if (report.age_range) metaParts.push('Age: ' + escapeHTML(report.age_range));
+        const metaHTML = metaParts.length
+          ? '<span class="report-meta">' + metaParts.join(' &nbsp;·&nbsp; ') + '</span>'
+          : '';
+
+        const reportId = String(report.id || '');
+        const corrobCount = corrobCounts[reportId] || 0;
+        const alreadyCorroborated = corroborated.has(reportId);
+        const corrobLabel = alreadyCorroborated ? `Corroborated ✓ (${corrobCount})` : `Corroborate (${corrobCount})`;
+        const corrobClass = alreadyCorroborated ? 'corroborate-btn corroborated' : 'corroborate-btn';
+
         const row = document.createElement('tr');
         row.innerHTML = `
-          <td data-label="Name">${escapeHTML(report.name || '')}${timestampHTML}</td>
+          <td data-label="Name">${escapeHTML(report.name || '')}${timestampHTML}${metaHTML}</td>
           <td data-label="Location">${formatLocation(report.city, report.state, report.country)}</td>
           <td data-label="Categories"><div class="pills">${pillHTML}</div></td>
           <td data-label="Actions">
             <div class="row-actions">
-              <button type="button" class="report-entry-btn" data-report-id="${escapeHTML(report.id || '')}">Report this entry</button>
-              <button type="button" class="report-share-btn" data-report-id="${escapeHTML(report.id || '')}">Share</button>
+              <button type="button" class="${corrobClass}" data-report-id="${escapeHTML(reportId)}"${alreadyCorroborated ? ' disabled' : ''}>${corrobLabel}</button>
+              <button type="button" class="add-cat-btn" data-report-id="${escapeHTML(reportId)}">Add Categories</button>
+              <button type="button" class="report-entry-btn" data-report-id="${escapeHTML(reportId)}">Report this entry</button>
+              <button type="button" class="report-share-btn" data-report-id="${escapeHTML(reportId)}">Share</button>
             </div>
           </td>
         `;
@@ -1922,7 +2040,7 @@ function addStoryTimestamp() {
       const selectedState = String((browseStateSelect && browseStateSelect.value) || '').trim().toLowerCase();
 
       const filtered = allReports.filter((report) => {
-        const blob = [report.name, report.city, report.state, report.country]
+        const blob = [report.name, report.alias, report.city, report.state, report.country]
           .map((item) => String(item || '').toLowerCase())
           .join(' ');
         const reportCountry = normalizeCountryForFiltering(report.country);
@@ -1951,24 +2069,59 @@ function addStoryTimestamp() {
       browseMessage.className = 'message';
     }
 
+    async function fetchReportsFromSupabase() {
+      const collected = [];
+      let from = 0;
+      while (true) {
+        const { data, error } = await supabaseClient
+          .from('reports')
+          .select('id, name, alias, age_range, city, state, country, categories, created_at, submitter_uuid')
+          .order('created_at', { ascending: false })
+          .range(from, from + 999);
+        if (error) throw error;
+        const rows = Array.isArray(data) ? data : [];
+        collected.push(...rows);
+        if (rows.length < 1000) break;
+        from += 1000;
+      }
+      return collected;
+    }
+
+    async function loadCorrobCounts() {
+      try {
+        const { data, error } = await supabaseClient
+          .from('report_corroborations')
+          .select('report_id');
+        if (error) throw error;
+        corrobCounts = {};
+        (data || []).forEach(({ report_id }) => {
+          const key = String(report_id);
+          corrobCounts[key] = (corrobCounts[key] || 0) + 1;
+        });
+      } catch (err) {
+        console.warn('Could not load corroboration counts:', err);
+      }
+    }
+
     async function loadReports() {
       browseMessage.textContent = 'Loading reports...';
       browseMessage.className = 'message';
       startReportCountLoadingAnimation();
       const WORKER_URL = 'https://api.namehim.app/filtered-reports';
+      const isLocalhost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
 
       try {
-        const response = await fetch(WORKER_URL);
-        if (!response.ok) {
-          throw new Error(`Worker returned ${response.status}`);
+        let rawReports;
+        if (isLocalhost) {
+          rawReports = await fetchReportsFromSupabase();
+        } else {
+          const response = await fetch(WORKER_URL);
+          if (!response.ok) throw new Error(`Worker returned ${response.status}`);
+          rawReports = await response.json();
+          if (!Array.isArray(rawReports)) throw new Error('Worker did not return an array');
         }
-        const reports = await response.json();
 
-        if (!Array.isArray(reports)) {
-          throw new Error('Worker did not return an array');
-        }
-
-        allReports = sanitizeFetchedReports(reports);
+        allReports = sanitizeFetchedReports(rawReports);
         window.allReports = allReports;
         hasLoadedReports = true;
         updateReportCount(allReports.length);
@@ -1976,7 +2129,7 @@ function addStoryTimestamp() {
         if (typeof window.refreshWorldMapReportData === 'function') {
           window.refreshWorldMapReportData();
         }
-        updateBrowseViewFromRoute({ preserveBrowsePage: true });
+        loadCorrobCounts().then(() => updateBrowseViewFromRoute({ preserveBrowsePage: true }));
         browseMessage.textContent = allReports.length
           ? `Loaded ${allReports.length} report(s).`
           : 'No reports yet. Be the first to submit.';
@@ -2270,6 +2423,8 @@ function addStoryTimestamp() {
 
       const payload = {
         name: sanitizeReportText(document.getElementById('name').value, MAX_BROWSE_FIELD_LENGTH),
+        alias: document.getElementById('alias').value.trim() || null,
+        age_range: document.getElementById('age-range').value || null,
         city: sanitizeReportText(document.getElementById('city').value, MAX_BROWSE_FIELD_LENGTH),
         state: sanitizeReportText(document.getElementById('state').value, MAX_BROWSE_FIELD_LENGTH) || null,
         country: sanitizeReportText(document.getElementById('country').value, MAX_BROWSE_FIELD_LENGTH),
@@ -2353,6 +2508,67 @@ function addStoryTimestamp() {
       }
     }
 
+    const ALLOWED_CATEGORIES = [
+      'emotional abuse', 'physical abuse', 'stalking', 'sexual assault',
+      'sexual harassment', 'harrassment', 'rape', 'pedo'
+    ];
+
+    function openAddCategoriesModal(reportId, existingCats) {
+      const modal = document.getElementById('add-cat-modal');
+      const container = document.getElementById('add-cat-checkboxes');
+      if (!modal || !container) return;
+      container.innerHTML = '';
+      ALLOWED_CATEGORIES.forEach(function(cat) {
+        const already = existingCats.includes(cat);
+        const label = document.createElement('label');
+        label.style.display = 'flex';
+        label.style.alignItems = 'center';
+        label.style.gap = '0.5rem';
+        label.style.padding = '0.25rem 0';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.value = cat;
+        cb.checked = already;
+        cb.disabled = already;
+        label.appendChild(cb);
+        const span = document.createElement('span');
+        span.textContent = cat.replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+        if (already) span.style.opacity = '0.5';
+        label.appendChild(span);
+        container.appendChild(label);
+      });
+      modal.setAttribute('data-report-id', reportId);
+      modal.classList.remove('hidden');
+    }
+
+    const addCatModal = document.getElementById('add-cat-modal');
+    if (addCatModal) {
+      document.getElementById('add-cat-cancel').addEventListener('click', function() {
+        addCatModal.classList.add('hidden');
+      });
+      addCatModal.addEventListener('click', function(e) {
+        if (e.target === addCatModal) addCatModal.classList.add('hidden');
+      });
+      document.getElementById('add-cat-save').addEventListener('click', async function() {
+        const reportId = addCatModal.getAttribute('data-report-id');
+        const checked = Array.from(addCatModal.querySelectorAll('input[type=checkbox]:checked')).map(function(cb) { return cb.value; });
+        if (!checked.length) { addCatModal.classList.add('hidden'); return; }
+        const report = allReports.find(function(r) { return String(r.id) === String(reportId); });
+        const existing = (report && report.categories) ? report.categories : [];
+        const merged = Array.from(new Set([...existing, ...checked]));
+        if (merged.length > 8) { alert('Cannot exceed 8 categories.'); return; }
+        try {
+          const { error } = await supabaseClient.from('reports').update({ categories: merged }).eq('id', parseInt(reportId, 10));
+          if (error) throw error;
+          if (report) report.categories = merged;
+          renderPagedReports(currentFilteredReports, currentPage);
+          addCatModal.classList.add('hidden');
+        } catch (err) {
+          alert('Could not update categories. ' + (err.message || ''));
+        }
+      });
+    }
+
     async function setupReportActionHandler() {
   reportsBody.addEventListener('click', async function onTableClick(event) {
     const shareButton = event.target.closest('.report-share-btn');
@@ -2361,6 +2577,42 @@ function addStoryTimestamp() {
       if (sharedReportId) {
         await copyShareLink(sharedReportId);
       }
+      return;
+    }
+
+    const corrobBtn = event.target.closest('.corroborate-btn');
+    if (corrobBtn && !corrobBtn.classList.contains('corroborated')) {
+      const rid = corrobBtn.getAttribute('data-report-id');
+      if (!rid) return;
+      const submitterId = localStorage.getItem('submitter_id') || getOrCreateSubmitterId();
+      corrobBtn.disabled = true;
+      try {
+        const { error } = await supabaseClient.from('report_corroborations').insert({ report_id: parseInt(rid, 10), submitter_uuid: submitterId });
+        if (error) {
+          if (error.code === '23505') {
+            corroborated.add(rid);
+          } else {
+            throw error;
+          }
+        } else {
+          corroborated.add(rid);
+          corrobCounts[rid] = (corrobCounts[rid] || 0) + 1;
+        }
+        localStorage.setItem('namehim_corroborated', JSON.stringify(Array.from(corroborated)));
+        renderPagedReports(currentFilteredReports, currentPage);
+      } catch (err) {
+        alert('Could not corroborate. Please try again.');
+        corrobBtn.disabled = false;
+      }
+      return;
+    }
+
+    const addCatBtn = event.target.closest('.add-cat-btn');
+    if (addCatBtn) {
+      const rid = addCatBtn.getAttribute('data-report-id');
+      const report = allReports.find(function(r) { return String(r.id) === String(rid); });
+      const existing = (report && report.categories) ? report.categories : [];
+      openAddCategoriesModal(rid, existing);
       return;
     }
 
@@ -2592,6 +2844,66 @@ function addStoryTimestamp() {
         }
       });
       reportForm.addEventListener('submit', handleSubmit);
+
+      // Duplicate name detection
+      (function setupDupeCheck() {
+        const nameInput = document.getElementById('name');
+        const dupeWarning = document.getElementById('name-dupe-warning');
+        if (!nameInput || !dupeWarning) return;
+
+        function normalizeName(str) { return str.trim().toLowerCase().replace(/\s+/g, ' '); }
+
+        function findNameMatches(raw) {
+          const norm = normalizeName(raw);
+          if (norm.length < 2) return [];
+          return allReports.filter(function(r) { return normalizeName(r.name || '') === norm; });
+        }
+
+        function showDupeWarning(matches, rawName) {
+          const sample = matches.slice(0, 3);
+          const more = matches.length - sample.length;
+          let html = '<div class="name-dupe-box"><div class="dupe-heading">⚠ This name already has ' + matches.length + ' entr' + (matches.length === 1 ? 'y' : 'ies') + '.</div>';
+          sample.forEach(function(r) {
+            html += '<div class="name-dupe-match"><strong>' + escapeHTML(r.name) + '</strong>';
+            if (r.alias) html += ' <span class="name-dupe-info">aka ' + escapeHTML(r.alias) + '</span>';
+            html += ' &mdash; <span class="name-dupe-info">' + escapeHTML(r.city) + (r.state ? ', ' + escapeHTML(r.state) : '') + ', ' + escapeHTML(r.country) + '</span></div>';
+          });
+          if (more > 0) html += '<div class="name-dupe-info" style="margin-top:0.25rem;">+ ' + more + ' more</div>';
+          const encodedName = encodeURIComponent(rawName.trim());
+          html += '<div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.75rem;">';
+          html += '<a href="#/browse?q=' + encodedName + '&from=submit" style="font-size:0.8rem;color:var(--accent);text-decoration:underline;">View all matches</a>';
+          html += '<button type="button" class="name-dupe-dismiss" style="font-size:0.8rem;background:none;border:none;color:var(--muted);cursor:pointer;text-decoration:underline;padding:0;">None of these people</button>';
+          html += '</div></div>';
+          dupeWarning.innerHTML = html;
+          dupeWarning.classList.remove('hidden');
+          dupeWarning.querySelector('.name-dupe-dismiss').addEventListener('click', function() {
+            dupeWarning.classList.add('hidden');
+          });
+        }
+
+        function hideDupeWarning() { dupeWarning.classList.add('hidden'); }
+
+        let dupeTimer;
+        nameInput.addEventListener('input', function() {
+          clearTimeout(dupeTimer);
+          const val = nameInput.value;
+          if (val.trim().length < 2) { hideDupeWarning(); return; }
+          dupeTimer = setTimeout(function() {
+            const matches = findNameMatches(val);
+            if (matches.length > 0) showDupeWarning(matches, val);
+            else hideDupeWarning();
+          }, 600);
+        });
+      })();
+
+      // "None of these people" from browse back to submit
+      const notThisPersonBtn = document.getElementById('not-this-person-btn');
+      if (notThisPersonBtn) {
+        notThisPersonBtn.addEventListener('click', function() {
+          window.location.hash = '#/submit';
+        });
+      }
+
       storyForm.addEventListener('submit', submitStory);
       if (showStoryFormBtn) {
         showStoryFormBtn.addEventListener('click', openStoryForm);
